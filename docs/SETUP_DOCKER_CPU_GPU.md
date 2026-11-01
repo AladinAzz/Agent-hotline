@@ -126,12 +126,12 @@ below, it passed every time.
    sets `ENTRYPOINT []`. NVIDIA's base-image entrypoint prints a license banner to stdout,
    which is the MCP transport, so the client times out without this.
 
-## Claude Code agent and rules (optional)
+## Agent rules (optional)
 
-`claude/phone-caller.md` is a subagent (Haiku, all tools, read-only during calls) that makes
-the call. Copy it to `~/.claude/agents/`. `claude/CLAUDE.phone-rules.md` holds the matching
-rules for `~/.claude/CLAUDE.md`: call for any input or question and when work finishes, and
-write a `context.md` for the agent first.
+To make an agent phone you on its own, give it standing instructions. For any agent, paste
+`integrations/generic/AGENT_RULES.md`. For Claude Code, copy `integrations/claude-code/phone-caller.md`
+to `~/.claude/agents/`; it is a subagent (Haiku, all tools, read-only during calls) that holds the
+call, and the rules for when to call live in its description. Other clients: see [CLIENTS.md](CLIENTS.md).
 
 ## Disk space on Windows
 

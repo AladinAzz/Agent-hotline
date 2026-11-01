@@ -13,7 +13,8 @@ it is for and how to tell it worked. For CPU-vs-GPU detail and fixes for specifi
 - **Optional:** an NVIDIA GPU for the faster GPU image (driver installed; Docker Desktop on the
   WSL2 backend).
 - About 5 GB free disk for the CPU image, or about 20 GB for the GPU image plus its build cache.
-- [Claude Code](https://claude.com/claude-code).
+- An MCP-capable agent. This guide uses [Claude Code](https://claude.com/claude-code), the one
+  tested; see [CLIENTS.md](CLIENTS.md) for others.
 
 ## Step 1 — Create the phone line (free SIP account)
 
@@ -50,8 +51,8 @@ docker info --format "server={{.ServerVersion}}"
 2. Get the code:
 
 ```bash
-git clone https://github.com/<your-user>/claude-hotline.git
-cd claude-hotline
+git clone https://github.com/<your-user>/agent-hotline.git
+cd agent-hotline
 ```
 
 3. **GPU only** — check Docker can see the card:
@@ -106,9 +107,10 @@ The file is gitignored (`*.docker.env`). **Never commit it or share it.** Make s
 placeholder text is left (`<username>`, `<password>`), and that your username matches on lines
 1 and 2.
 
-## Step 6 — Register with Claude Code
+## Step 6 — Connect your agent (Claude Code shown)
 
-This tells Claude Code how to start the container. Use the full path to your env file:
+This tells your agent how to start the container. Other agents use the same `docker run`
+command in their own config; see [CLIENTS.md](CLIENTS.md). Use the full path to your env file:
 
 ```bash
 # CPU
@@ -148,16 +150,16 @@ If something is off:
 
 ## Step 8 — Let the agent call you on its own (optional)
 
-This is the part that makes Claude Code phone you when it finishes a task or needs a decision.
+This is the part that makes your agent phone you when it finishes a task or needs a decision.
 
-1. Copy `claude/phone-caller.md` to `~/.claude/agents/`. It is a small, fast (Haiku) agent
-   that makes the call and reports back what you said.
-2. Add the contents of `claude/CLAUDE.phone-rules.md` to `~/.claude/CLAUDE.md`. These rules say
-   when to call and to write a short `context.md` for the agent first.
-3. Start a fresh session and try: *"use the phone-caller agent to call me and say hello"*.
-
-The agent can read your project during a call but does not change files; any change you ask
-for happens afterwards in the main session.
+- **Any agent:** paste [integrations/generic/AGENT_RULES.md](../integrations/generic/AGENT_RULES.md)
+  into its standing instructions (`AGENTS.md`, a system prompt, and so on).
+- **Claude Code:** copy `integrations/claude-code/phone-caller.md` to `~/.claude/agents/`. It is
+  a small, fast (Haiku) subagent that makes the call and reports back what you said. The rules
+  for when to call are in its description, so nothing needs adding to `CLAUDE.md`. Start a fresh
+  session and try: *"use the phone-caller agent to call me and say hello"*. The subagent can
+  read your project during a call but does not change files; any change you ask for happens
+  afterwards in the main session.
 
 ## Step 9 — Daily use and upkeep
 

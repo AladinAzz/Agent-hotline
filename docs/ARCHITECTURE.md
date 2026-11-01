@@ -1,6 +1,6 @@
 # Architecture
 
-How a phone call between Claude Code and you works, and where the time goes in each turn.
+How a phone call between an AI agent and you works, and where the time goes in each turn.
 Written from reading the code (`voice_mcp.py`, `voice_agent.py`, `platform_compat.py`) and from
 timing runs on Windows 11 with Docker Desktop. Numbers marked *measured* came from those runs;
 *estimate* means they did not.
@@ -9,7 +9,7 @@ timing runs on Windows 11 with Docker Desktop. Numbers marked *measured* came fr
 
 ```mermaid
 flowchart LR
-    CC["Claude Code<br/>main session"] -- "brief + context.md" --> PC["phone-caller<br/>(Haiku subagent)"]
+    CC["Your agent<br/>(any MCP client)"] -- "brief + context.md" --> PC["phone-caller<br/>(Haiku subagent)"]
     PC -- "MCP over stdio<br/>call_start / converse / call_end" --> MCP
     subgraph D["Docker container (CPU or GPU image)"]
         MCP["voice_mcp.py<br/>MCP tools"] --> VA["voice_agent.py<br/>call session"]
@@ -23,7 +23,7 @@ flowchart LR
 
 | Piece | What it does | File |
 |---|---|---|
-| `phone-caller` agent | Reads a `context.md`, makes the call, asks the questions, returns what you said. Runs on Haiku. Instructed to only read, never edit, during a call (a rule in its prompt, not enforced by the tool). | `claude/phone-caller.md` |
+| `phone-caller` subagent (optional, Claude Code) | Reads a `context.md`, makes the call, asks the questions, returns what you said. Runs on Haiku. Instructed to only read, never edit, during a call (a rule in its prompt, not enforced by the tool). | `integrations/claude-code/phone-caller.md` |
 | MCP server | Exposes the call tools over stdio: `call_start`, `converse`, `speak`, `listen`, `get_conversation`, `call_end`, `call_status`. | `voice_mcp.py` |
 | Call session | Owns the SIP call, plays speech, records and transcribes you, detects end of turn and interruptions. | `voice_agent.py` |
 | SIP stack | pjproject / pjsua2 built from source, with a Python binding. Headless: it uses a null audio device and works on WAV files. | built in the Dockerfile |
@@ -35,7 +35,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-    participant CC as Claude Code
+    participant CC as Your agent
     participant PC as phone-caller (Haiku)
     participant S as MCP server + engine
     participant P as Your phone
@@ -136,6 +136,7 @@ into the image. The engine calls only the SIP address you configure (your own by
 | `server.py` | optional alert server (ntfy / Pushover / SIP ring); not used in this setup |
 | `Dockerfile`, `Dockerfile.gpu` | CPU and CUDA images |
 | `tests/` | offline tests (dial nobody): `python tests/run_all.py` |
-| `claude/` | the `phone-caller` agent and the Claude Code rules |
+| `integrations/` | rules for any agent, and the Claude Code `phone-caller` subagent |
+| `examples/` | a plain-Python client |
 | `docs/` | this documentation, plus upstream's platform guides |
 | `UPSTREAM_README.md` | upstream's full README |
