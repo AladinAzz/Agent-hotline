@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """ringback-voice MCP — exposes a live phone call as speak/listen tools.
 
-The calling Claude session IS the conversational brain: it calls call_start to
-ring the user, then alternates listen()/speak() each turn, and call_end() when
-done. No LLM API key — the model already running this tool does the thinking.
+The calling agent (any LLM or agent that can use MCP tools) IS the conversational
+brain: it calls call_start to ring the user, then alternates listen()/speak() each
+turn, and call_end() when done. No LLM API key — the model already running this
+tool does the thinking.
 
 Requires pjsua2 (built from source) + whisper.cpp + Piper/say (TTS) + ffmpeg.
 Launched via run_voice_mcp.sh (macOS) or run_voice_mcp.py (cross-platform), which set
 PYTHONPATH + the OS dynamic-linker path so `import voice_agent` (pjsua2) resolves.
 """
+import io
 import os
+import sys
 import time
 from mcp.server.fastmcp import FastMCP
 import voice_agent
@@ -64,7 +67,7 @@ def call_start(opening_line: str) -> str:
     answer it speaks `opening_line` aloud, then listens and returns what they say.
 
     CONVERSATION PROTOCOL — just two tools, one call per turn:
-      1. reply = call_start("Hi, it's your Claude assistant — your prod deploy
+      1. reply = call_start("Hi, it's your AI assistant — your prod deploy
          failed. Want me to walk you through it?")   # dials, speaks, returns reply
       2. reply = converse("<your short response>")    # speaks + listens, each turn
       3. repeat step 2 for every turn
@@ -123,7 +126,7 @@ def get_conversation() -> str:
     out = []
     for e in s.log:
         if e["who"] == "claude":
-            line = f'CLAUDE: "{e["text"]}"'
+            line = f'AGENT: "{e["text"]}"'
             if e.get("interrupted"):
                 line += f'  [cut off; had not said: "{e.get("unsaid", "")}"]'
         else:
@@ -205,7 +208,25 @@ def call_status() -> str:
     return f"connected={s.connected} disconnected={s.disconnected}"
 
 
+def _isolate_protocol_stdout() -> None:
+    """Keep the MCP protocol on a private copy of the real stdout.
+
+    The pjsip C library prints start-up log lines straight to fd 1 when the engine is
+    created. fd 1 is the MCP transport, so a strict client sees non-JSON lines in the
+    stream. Save the real stdout for the protocol and point fd 1 at stderr; anything else
+    that writes to stdout then lands in the logs instead.
+    """
+    try:
+        sys.stdout.flush()
+        protocol_fd = os.dup(1)
+        os.dup2(2, 1)
+        sys.stdout = io.TextIOWrapper(os.fdopen(protocol_fd, "wb"), encoding="utf-8")
+    except OSError as e:
+        print(f"[ringback] could not isolate the MCP stdout: {e}", file=sys.stderr)
+
+
 def main():
+    _isolate_protocol_stdout()
     mcp.run()
 
 
