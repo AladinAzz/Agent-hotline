@@ -1,0 +1,105 @@
+# Dockerfile.gpu — ringback voice image with whisper.cpp built for NVIDIA CUDA.
+#
+# Same stack as the CPU Dockerfile (pjsua2, Piper, ffmpeg), but whisper.cpp is compiled
+# with CUDA so speech-to-text runs on the GPU. Local addition, kept separate so the CPU
+# image stays a working fallback.
+#
+# Build:  docker build -f Dockerfile.gpu -t ringback-gpu .
+# Run  :  docker run -i --rm --gpus all --env-file voice.docker.env ringback-gpu
+# Needs an NVIDIA GPU, a recent driver, and Docker Desktop's WSL2 backend (or the NVIDIA
+# container toolkit on Linux). CUDA_ARCH below is 86 for RTX 30-series (Ampere).
+
+FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+
+ARG PJ_VER=2.17
+ARG CUDA_ARCH=86
+ENV DEBIAN_FRONTEND=noninteractive \
+    PJDIR=/opt/pjproject-${PJ_VER} \
+    WHISPER_MODEL_DIR=/root/.whisper-models \
+    PIPER_DIR=/root/.piper-voices
+
+# --- system toolchain + runtime libs ------------------------------------------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3 python3-dev python3-pip python-is-python3 \
+        build-essential swig cmake git curl ca-certificates xz-utils \
+        libssl-dev libopus-dev libsdl2-dev libasound2-dev \
+        ffmpeg espeak-ng baresip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# --- pjproject + pjsua2 python bindings ----------------------------------------
+RUN curl -fsSL "https://github.com/pjsip/pjproject/archive/refs/tags/${PJ_VER}.tar.gz" \
+        -o /tmp/pj.tgz \
+    && tar xzf /tmp/pj.tgz -C /opt && rm /tmp/pj.tgz \
+    && cd ${PJDIR} \
+    && CFLAGS="-fPIC -O2" ./configure --enable-shared --with-ssl \
+    && make dep && make \
+    && cd ${PJDIR}/pjsip-apps/src/swig/python \
+    && CFLAGS="-std=c++11 -fPIC -O2" CXXFLAGS="-std=c++11 -fPIC -O2" make \
+    && mkdir -p /opt/pjsua2 \
+    && cp -r $(ls -d build/lib.*/ | head -1)/* /opt/pjsua2/ \
+    && for d in pjlib pjlib-util pjnath pjmedia pjsip third_party; do \
+         find ${PJDIR}/$d/lib -name '*.so*' -exec cp -a {} /usr/local/lib/ \; ; done \
+    && ldconfig
+
+# --- whisper.cpp with CUDA (whisper-cli + whisper-server) ----------------------
+# GGML_NATIVE=OFF keeps the CPU part portable; the GPU kernels are built for CUDA_ARCH.
+# The CUDA driver library is injected at runtime by --gpus all; the build links the stub.
+# Split into three steps so the ~25 min CUDA compile is cached on its own; a link problem
+# in the last step can then be fixed without recompiling. -j3 keeps nvcc under Docker
+# Desktop's ~8 GB (an unlimited -j crashed the build engine).
+RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /opt/whisper.cpp \
+    && cmake -S /opt/whisper.cpp -B /opt/whisper.cpp/build \
+        -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF \
+        -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCH} >/dev/null
+RUN cmake --build /opt/whisper.cpp/build -j3 --target whisper
+# Build machines have no GPU driver: link against NVIDIA's stub, exposed under the soname
+# (libcuda.so.1) that libggml-cuda records. The real driver is injected by --gpus all.
+RUN ln -sf /usr/local/cuda/lib64/stubs/libcuda.so /usr/local/cuda/lib64/stubs/libcuda.so.1 \
+    && cmake -S /opt/whisper.cpp -B /opt/whisper.cpp/build \
+        -DCMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,/usr/local/cuda/lib64/stubs" >/dev/null \
+    && cmake --build /opt/whisper.cpp/build -j3 --target whisper-cli whisper-server \
+    && cp /opt/whisper.cpp/build/bin/whisper-cli /opt/whisper.cpp/build/bin/whisper-server \
+          /usr/local/bin/ \
+    && find /opt/whisper.cpp/build -name '*.so*' -exec cp -a {} /usr/local/lib/ \; \
+    && ldconfig \
+    && rm -rf /opt/whisper.cpp/build/CMakeFiles
+
+# --- Python deps + Piper neural TTS -------------------------------------------
+# mcp is pinned below 2: 2.x renamed FastMCP and the server fails to start.
+RUN pip install --no-cache-dir "mcp>=1.2.0,<2" httpx piper-tts
+
+# --- models --------------------------------------------------------------------
+# small.en: more accurate than base.en and fast enough on the GPU.
+RUN mkdir -p ${WHISPER_MODEL_DIR} \
+    && curl -fL "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin" \
+        -o ${WHISPER_MODEL_DIR}/ggml-small.en.bin
+RUN mkdir -p ${PIPER_DIR} \
+    && PV=https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium \
+    && curl -fL "$PV/en_US-lessac-medium.onnx"      -o ${PIPER_DIR}/en_US-lessac-medium.onnx \
+    && curl -fL "$PV/en_US-lessac-medium.onnx.json" -o ${PIPER_DIR}/en_US-lessac-medium.onnx.json
+
+# --- runtime env --------------------------------------------------------------
+ENV PYTHONPATH=/opt/pjsua2:/app \
+    LD_LIBRARY_PATH=/usr/local/lib \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    WHISPER_SERVER_MODEL=/root/.whisper-models/ggml-small.en.bin \
+    WHISPER_MODEL=/root/.whisper-models/ggml-small.en.bin \
+    VOICE_PIPER_MODEL=/root/.piper-voices/en_US-lessac-medium.onnx \
+    VOICE_TTS=piper \
+    VOICE_NULL_AUDIO=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+COPY voice_mcp.py voice_agent.py platform_compat.py aec.py server.py \
+     voice.env.example alert.env.example ./
+COPY tests/ ./tests/
+
+# The NVIDIA base image's entrypoint prints a license banner to STDOUT, which is the MCP
+# transport — the client sees a non-JSON first line and times out. Clear the entrypoint.
+ENTRYPOINT []
+
+# stdio MCP server — speaks the MCP protocol over stdin/stdout.
+CMD ["python", "voice_mcp.py"]
