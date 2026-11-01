@@ -1,3 +1,13 @@
+# claude-hotline
+
+> A fork of [mohitbadwal/ringback](https://github.com/mohitbadwal/ringback) (Apache-2.0) that
+> lets Claude Code phone you and talk. This fork adds Docker images for **CPU and NVIDIA GPU**,
+> a Windows setup guide, and faster turn-taking. Start with
+> [docs/SETUP_DOCKER_CPU_GPU.md](docs/SETUP_DOCKER_CPU_GPU.md). Everything below is upstream's
+> README; the MCP server is still called `ringback-voice`.
+
+---
+
 # ringback
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
