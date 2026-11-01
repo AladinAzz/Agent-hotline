@@ -64,7 +64,7 @@ RUN git clone --depth 1 https://github.com/ggerganov/whisper.cpp /opt/whisper.cp
     && rm -rf /opt/whisper.cpp/build/CMakeFiles
 
 # --- Python deps + Piper neural TTS -------------------------------------------
-RUN pip install --no-cache-dir "mcp>=1.2.0" httpx piper-tts
+RUN pip install --no-cache-dir "mcp>=1.2.0,<2" httpx piper-tts
 
 # --- models (baked in so the image works out of the box; override via volume) ---
 # whisper streaming server model (base.en) — the hot path.
