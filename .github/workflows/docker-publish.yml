@@ -8,20 +8,10 @@ name: Build and publish Docker image (GHCR)
 #
 # The package is published public so anonymous `docker pull` works.
 
+# Manual only in this fork: upstream also ran on every push and release. A push here would
+# otherwise build and publish a public image automatically (see NOTICE for the GPL caveat).
 on:
   workflow_dispatch:
-  release:
-    types: [published]
-  push:
-    branches: [main]
-    paths:
-      - "Dockerfile"
-      - "voice_mcp.py"
-      - "voice_agent.py"
-      - "platform_compat.py"
-      - "server.py"
-      - "aec.py"
-      - ".github/workflows/docker-publish.yml"
 
 env:
   REGISTRY: ghcr.io
