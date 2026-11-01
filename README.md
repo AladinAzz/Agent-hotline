@@ -17,7 +17,7 @@
 
 It ships two MCP servers, `ringback-alert` and `ringback-voice`:
 
-> **Platform:** macOS, **Linux**, and **Windows** (via WSL2 or Docker). TTS is [Piper](https://github.com/rhasspy/piper) by default (same voice everywhere), falling back to the OS-native voice (`say` on macOS). The engine is **headless** — it never opens a local mic/speaker (all audio is WAV ↔ SIP/RTP), so no sound card is required. Setup guides: [macOS](docs/SETUP_MACOS.md) · [Linux](docs/SETUP_LINUX.md) · [Windows](docs/SETUP_WINDOWS.md) · [Docker](docs/SETUP_DOCKER.md) · [Windows + GPU](docs/SETUP_WINDOWS_GPU.md).
+> **Platform:** macOS, **Linux**, and **Windows** (via WSL2 or Docker). TTS is [Piper](https://github.com/rhasspy/piper) by default (same voice everywhere), falling back to the OS-native voice (`say` on macOS). The engine is **headless** — it never opens a local mic/speaker (all audio is WAV ↔ SIP/RTP), so no sound card is required. Setup guides: [macOS](docs/SETUP_MACOS.md) · [Linux](docs/SETUP_LINUX.md) · [Windows](docs/SETUP_WINDOWS.md) · [Docker](docs/SETUP_DOCKER.md) · [Docker CPU or GPU](docs/SETUP_DOCKER_CPU_GPU.md).
 
 | Server | Tools | What it does |
 |---|---|---|
