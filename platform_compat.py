@@ -18,6 +18,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import wave
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = os.name == "nt" or sys.platform.startswith("win")
@@ -172,8 +174,44 @@ def _synth_say(text: str) -> str:
     return aiff
 
 
+# The voice is loaded once and reused: spawning `piper` per sentence reloads the ONNX model
+# every time (~2.5 s per turn). The piper-tts import stays lazy so this module remains light.
+_piper_voice = None
+_piper_load_failed = False
+_piper_lock = threading.Lock()
+
+
+def _load_piper_voice():
+    """Return the cached in-process PiperVoice, loading it on first use; None if unavailable."""
+    global _piper_voice, _piper_load_failed
+    with _piper_lock:
+        if _piper_voice is None and not _piper_load_failed:
+            try:
+                from piper import PiperVoice
+                _piper_voice = PiperVoice.load(PIPER_MODEL)
+            except Exception as e:  # missing library/model: use the subprocess path
+                _piper_load_failed = True
+                print(f"[ringback] in-process Piper unavailable ({type(e).__name__}); "
+                      "using the piper CLI", file=sys.stderr, flush=True)
+        return _piper_voice
+
+
+def warm_piper() -> None:
+    """Load the Piper voice in the background (e.g. while the phone is ringing)."""
+    threading.Thread(target=_load_piper_voice, daemon=True).start()
+
+
 def _synth_piper(text: str) -> str:
     wav = tempfile.mktemp(suffix=".wav")
+    voice = _load_piper_voice()
+    if voice is not None:
+        try:
+            with _piper_lock, wave.open(wav, "wb") as w:
+                voice.synthesize_wav(text, w)
+            return wav
+        except Exception as e:
+            print(f"[ringback] in-process Piper failed ({type(e).__name__}); "
+                  "using the piper CLI", file=sys.stderr, flush=True)
     # piper reads the text on stdin and writes a WAV to -f/--output_file. The matching
     # <model>.onnx.json config must sit next to the .onnx model.
     subprocess.run([PIPER_BIN, "-m", PIPER_MODEL, "-f", wav],

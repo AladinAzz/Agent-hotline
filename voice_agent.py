@@ -30,7 +30,7 @@ import pjsua2 as pj
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
-from platform_compat import IS_MAC, IS_WIN, detached_popen_kwargs, synthesize_to_wav  # noqa: E402
+from platform_compat import IS_MAC, IS_WIN, detached_popen_kwargs, synthesize_to_wav, warm_piper  # noqa: E402
 
 # ---- config (all via env; see voice.env.example) ------------------------------
 # Your SIP identity/credentials come from the environment (the launcher sources
@@ -418,7 +418,8 @@ def _capture_turn(snapshot_fn, is_disconnected, max_sec: float = 15.0,
       - AFTER voice: end `end_silence` after voice stops (energy fell silent AND no new words).
     Energy — not transcript text — drives the endpoint, because whisper re-words the same
     noisy clip every poll (held the turn open ~15s) and word-count plateaus chop real speech.
-    Returns the streamed transcript; the final re-transcribe is the caller's job.
+    Returns the streamed transcript; stats["text_complete"] says whether it already covers the
+    whole turn (else the final re-transcribe is the caller's job).
     """
     start = time.time()
     text = ""
@@ -428,12 +429,48 @@ def _capture_turn(snapshot_fn, is_disconnected, max_sec: float = 15.0,
     polls = voiced_polls = snaps = 0
     rms_max = 0.0
     exit_reason = "max_sec"
+    # Transcription runs on ONE background worker so the 0.1 s energy poll never blocks on
+    # whisper (~1.3 s each); end-of-turn is then detected within ~0.1 s of end_silence.
+    worker = None             # in-flight transcription thread
+    worker_el = 0.0           # elapsed time its snapshot was taken
+    box: dict = {}            # worker result: text + the snapshot time behind it
+    text_snap_el = -1.0       # elapsed time of the snapshot behind `text`
+
+    def _run(snap, snap_el):
+        try:
+            box["text"] = _transcribe_stream(snap)
+        except Exception:
+            box["text"] = ""
+        finally:
+            _rm(snap)
+        box["snap_el"] = snap_el
+
+    def _harvest():
+        """Fold a finished worker's transcript into `text`. Returns the elapsed time of the
+        snapshot that revealed NEW words (when the speech actually happened), else None."""
+        nonlocal worker, text, max_words, text_snap_el, snaps
+        if worker is None or worker.is_alive():
+            return None
+        worker = None
+        snaps += 1
+        t = box.pop("text", "")
+        snap_el = box.pop("snap_el", 0.0)
+        if not t:
+            return None
+        text, text_snap_el = t, snap_el
+        wc = len(t.split())
+        if wc > max_words:
+            max_words = wc
+            return snap_el
+        return None
 
     def _fill():
         if stats is not None:
+            # the streamed text is final when its snapshot was taken after the last voiced poll
+            complete = bool(text) and last_voice is not None and text_snap_el >= last_voice + 0.2
             stats.update(exit=exit_reason, dur=time.time() - start, rms_max=rms_max,
                          thresh=end_rms, polls=polls, voiced_polls=voiced_polls,
-                         snaps=snaps, words=max_words)
+                         snaps=snaps, words=max_words, text_complete=complete)
 
     while time.time() - start < max_sec:
         time.sleep(0.1)
@@ -446,22 +483,20 @@ def _capture_turn(snapshot_fn, is_disconnected, max_sec: float = 15.0,
         rms = energy_fn() if energy_fn is not None else 0.0           # checked every poll
         rms_max = max(rms_max, rms)
         voiced = energy_fn is not None and rms > end_rms
-        if el >= 0.5 and (el - last_check) >= 0.3:                    # transcribe ~3x/sec
+        new_words_el = _harvest()            # genuinely new words also count as voiced
+        if worker is None and el >= 0.5 and (el - last_check) >= 0.3:   # transcribe ~3x/sec
             last_check = el
             snap = snapshot_fn()
-            t = _transcribe_stream(snap) if snap else ""   # already hallucination-filtered
-            if snap:
-                snaps += 1
-                _rm(snap)
-            if t:
-                text = t
-                wc = len(t.split())
-                if wc > max_words:           # genuinely new words also count as voiced
-                    max_words = wc
-                    voiced = True
+            if snap:                         # transcript is already hallucination-filtered
+                worker, worker_el = threading.Thread(
+                    target=_run, args=(snap, el), daemon=True), el
+                worker.start()
         if voiced:
             voiced_polls += 1
             last_voice = el
+        elif new_words_el is not None:       # stamp the words when spoken, not when whisper returned
+            voiced_polls += 1
+            last_voice = max(last_voice or 0.0, new_words_el)
         if last_voice is None:
             if el >= start_timeout:
                 exit_reason = "start_timeout"
@@ -469,6 +504,11 @@ def _capture_turn(snapshot_fn, is_disconnected, max_sec: float = 15.0,
         elif (el - last_voice) >= end_silence:
             exit_reason = "end_silence"
             break                             # voice stopped for end_silence -> end turn
+    # an in-flight snapshot taken AFTER the last voiced poll is the complete transcript: wait
+    # for it (less than a fresh pass); an older one is stale, so the caller re-transcribes.
+    if worker is not None and last_voice is not None and worker_el >= last_voice + 0.2:
+        worker.join(timeout=3.0)
+    _harvest()
     _fill()
     return text
 
@@ -675,6 +715,7 @@ class CallSession:
         if self.call is not None:        # clear any previous call object
             self.call = None
             gc.collect()
+        warm_piper()   # load the TTS voice while the phone rings so the first line is fast
         self.call = _Call(self.acc, self)
         self.call.makeCall(callee or SIP_CALLEE, pj.CallOpParam(True))
         end = time.time() + answer_timeout
@@ -752,10 +793,14 @@ class CallSession:
             _listen_summary(st, wav_bytes, "", hangup=True)
             _rm(rec_wav)
             return ""
-        snap = _wav_snapshot(rec_wav)            # full audio with a correct header
-        final = _transcribe_stream(snap) if snap else ""
-        if snap:
-            _rm(snap)
+        if st.get("text_complete"):              # streamed transcript already covers the turn
+            _dlog("listen: final re-transcribe skipped (streamed text is complete)")
+            final = ""
+        else:
+            snap = _wav_snapshot(rec_wav)        # full audio with a correct header
+            final = _transcribe_stream(snap) if snap else ""
+            if snap:
+                _rm(snap)
         result = final or text
         _listen_summary(st, wav_bytes, result)
         if not result and DEBUG_KEEP_WAV:        # keep the audio of a silent turn for replay
@@ -785,7 +830,8 @@ class CallSession:
         """
         self._reg()
         _t0 = time.time()
-        _tlog = ((lambda m: print("[timing] +%5.2fs %s" % (time.time() - _t0, m), flush=True))
+        _tlog = ((lambda m: print("[timing] +%5.2fs %s" % (time.time() - _t0, m),
+                                  file=sys.stderr, flush=True))   # stdout is the MCP transport
                  if os.environ.get("VOICE_TIMING") else (lambda m: None))
         if not (self.connected and self.aud):
             return {"ok": False, "ended": self.disconnected, "user": "",
