@@ -46,7 +46,7 @@ sequenceDiagram
     S->>P: SIP INVITE (via sip.linphone.org)
     P-->>S: answered
     S->>P: speak opening line (barge-in monitored)
-    P->>S: you talk; streamed to whisper
+    P->>S: you talk, audio streamed to whisper
     S-->>PC: "User replied: ..."
     PC->>S: converse("short answer or question")
     S->>P: speak
